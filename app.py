@@ -142,30 +142,100 @@ with tab3:
 # TAB 4: OPERATIONS (CRUD)
 # ══════════════════════════════════════════════════════════════
 with tab4:
-    st.subheader("Secure Data Entry (Transaction Protocol)")
-    with st.form("delivery_form", clear_on_submit=True):
-        col1, col2 = st.columns(2)
-        with col1:
-            ship_id = st.number_input("Shipment ID", min_value=1, step=1)
-            actual_date = st.date_input("Actual Delivery Date", date.today())
-        with col2:
-            delay_hrs = st.number_input("Delay Duration (Hours)", min_value=0, step=1)
-            status = st.selectbox("Delivery Status", ["On-Time", "Delayed"])
-        
-        submit = st.form_submit_button("Execute SQL Transaction")
-        if submit:
-            try:
-                cur = conn.cursor()
-                cur.execute("INSERT INTO Delivery (ShipmentID, ActualDeliveryDate, DelayDuration, DeliveryStatus) VALUES (%s, %s, %s, %s)", (ship_id, actual_date, delay_hrs, status))
-                cur.execute("UPDATE Shipment SET Status = 'Delivered' WHERE ShipmentID = %s", (ship_id,))
-                conn.commit()
-                st.success(f"✅ Transaction Successful! Shipment {ship_id} marked as Delivered.")
-                st.balloons()
-            except Exception as e:
-                conn.rollback() 
-                st.error("🚨 SQL State 23503: Foreign Key Violation Detected. Transaction Rolled Back.")
-                st.code(str(e))
+    st.subheader("Data Management (CRUD Operations)")
+    
+    # Create sub-tabs for different operations
+    op_tab1, op_tab2 = st.tabs(["📦 Create New Shipment (INSERT)", "🚚 Log Delivery (UPDATE & INSERT)"])
+    
+    # --- SUB-TAB 1: CREATE NEW SHIPMENT ---
+    with op_tab1:
+        st.markdown("Log a brand new shipment into the active network.")
+        with st.form("new_shipment_form", clear_on_submit=True):
+            
+            # Fetch real data for our dropdowns
+            df_v = pd.read_sql("SELECT VendorID, Name FROM Vendor", conn)
+            v_dict = dict(zip(df_v['name'], df_v['vendorid']))
+            
+            df_w = pd.read_sql("SELECT WarehouseID, Location FROM Warehouse", conn)
+            w_dict = dict(zip(df_w['location'], df_w['warehouseid']))
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                new_vendor = st.selectbox("Select Logistics Vendor", list(v_dict.keys()))
+                new_origin = st.text_input("Origin City (e.g., Tokyo, Japan)")
+                dispatch = st.date_input("Dispatch Date", date.today())
+            with col2:
+                new_ware = st.selectbox("Destination Warehouse", list(w_dict.keys()))
+                new_dest = st.text_input("Destination City (e.g., London, UK)")
+                expected = st.date_input("Expected Delivery", date.today())
+                
+            submit_new = st.form_submit_button("Generate New Shipment")
+            
+            if submit_new:
+                if new_origin and new_dest:
+                    try:
+                        cur = conn.cursor()
+                        # Use RETURNING to get the ID of the row we just created
+                        cur.execute("""
+                            INSERT INTO Shipment (VendorID, DestinationWarehouseID, Origin, Destination, DispatchDate, ExpectedDeliveryDate, Status)
+                            VALUES (%s, %s, %s, %s, %s, %s, 'In Transit')
+                            RETURNING ShipmentID;
+                        """, (v_dict[new_vendor], w_dict[new_ware], new_origin, new_dest, dispatch, expected))
+                        
+                        new_id = cur.fetchone()[0]
+                        conn.commit()
+                        st.success(f"✅ Success! New Shipment created with ID: {new_id}")
+                        st.balloons()
+                    except Exception as e:
+                        conn.rollback()
+                        st.error(f"Database Error: {e}")
+                else:
+                    st.warning("Please type in both Origin and Destination cities.")
 
+    # --- SUB-TAB 2: LOG DELIVERY ---
+    with op_tab2:
+        st.markdown("Log the final arrival of a shipment.")
+        
+        # The Teacher Demo Toggle
+        manual_mode = st.toggle("Enable Manual ID Entry (For Constraint Testing Demo)")
+        if manual_mode:
+            st.info("💡 **Teacher Demo Active:** Type a bad ID (like 999) to trigger the SQL Foreign Key constraint error.")
+
+        with st.form("delivery_form", clear_on_submit=True):
+            col1, col2 = st.columns(2)
+            with col1:
+                if manual_mode:
+                    ship_id = st.number_input("Shipment ID", min_value=1, step=1)
+                else:
+                    # Smart Dropdown: Only show shipments that actually need delivery
+                    df_active = pd.read_sql("SELECT ShipmentID, Origin, Destination FROM Shipment WHERE Status IN ('Pending', 'In Transit')", conn)
+                    if not df_active.empty:
+                        active_list = [f"{row['shipmentid']} - {row['origin']} ➔ {row['destination']}" for _, row in df_active.iterrows()]
+                        selected_active = st.selectbox("Select Active Shipment", active_list)
+                        ship_id = int(selected_active.split(" - ")[0])
+                    else:
+                        st.warning("No active shipments available. Create one first!")
+                        ship_id = 0
+                        
+                actual_date = st.date_input("Actual Delivery Date", date.today())
+            
+            with col2:
+                delay_hrs = st.number_input("Delay Duration (Hours)", min_value=0, step=1)
+                status = st.selectbox("Delivery Status", ["On-Time", "Delayed"])
+            
+            submit_del = st.form_submit_button("Execute SQL Transaction")
+            
+            if submit_del and ship_id > 0:
+                try:
+                    cur = conn.cursor()
+                    cur.execute("INSERT INTO Delivery (ShipmentID, ActualDeliveryDate, DelayDuration, DeliveryStatus) VALUES (%s, %s, %s, %s)", (ship_id, actual_date, delay_hrs, status))
+                    cur.execute("UPDATE Shipment SET Status = 'Delivered' WHERE ShipmentID = %s", (ship_id,))
+                    conn.commit()
+                    st.success(f"✅ Transaction Successful! Shipment {ship_id} marked as Delivered.")
+                except Exception as e:
+                    conn.rollback() 
+                    st.error("🚨 SQL State 23503: Foreign Key/Unique Constraint Violation Detected. Transaction Rolled Back.")
+                    st.code(str(e))
 # ══════════════════════════════════════════════════════════════
 # TAB 5: EXPORT CENTER (ALL 10 REPORTS)
 # ══════════════════════════════════════════════════════════════
